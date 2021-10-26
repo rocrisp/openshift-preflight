@@ -64,10 +64,6 @@ func (bose BadOperatorSdkEngine) BundleValidate(bundleImage string, opts cli.Ope
 
 type FakeOpenshiftEngine struct{}
 
-func (foe FakeOpenshiftEngine) Setup() error {
-	return nil
-}
-
 func (foe FakeOpenshiftEngine) CreateNamespace(name string, opts cli.OpenshiftOptions) (*corev1.Namespace, error) {
 	return &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -85,6 +81,32 @@ func (foe FakeOpenshiftEngine) GetNamespace(name string) (*corev1.Namespace, err
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-ns",
 		},
+	}, nil
+}
+
+func (foe FakeOpenshiftEngine) CreateSecret(name string, content map[string]string, secretType corev1.SecretType, opts cli.OpenshiftOptions) (*corev1.Secret, error) {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pull-image-secret",
+			Namespace: "test-ns",
+		},
+		Type:       "kubernetes.io/dockerconfigjson",
+		StringData: map[string]string{".dockerconfigjson": "secretData"},
+	}, nil
+}
+
+func (foe FakeOpenshiftEngine) DeleteSecret(name string, opts cli.OpenshiftOptions) error {
+	return nil
+}
+
+func (foe FakeOpenshiftEngine) GetSecret(name string, opts cli.OpenshiftOptions) (*corev1.Secret, error) {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pull-image-secret",
+			Namespace: "test-ns",
+		},
+		Type:       "kubernetes.io/dockerconfigjson",
+		StringData: map[string]string{".dockerconfigjson": "secretData"},
 	}, nil
 }
 
@@ -191,11 +213,11 @@ func (foe FakeOpenshiftEngine) GetCSV(name string, opts cli.OpenshiftOptions) (*
 	}, nil
 }
 
-type BadOpenshiftEngine struct{}
-
-func (foe BadOpenshiftEngine) Setup() error {
-	return nil
+func (foe FakeOpenshiftEngine) GetImages() (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
 }
+
+type BadOpenshiftEngine struct{}
 
 func (foe BadOpenshiftEngine) CreateNamespace(name string, opts cli.OpenshiftOptions) (*corev1.Namespace, error) {
 	return &corev1.Namespace{
@@ -214,6 +236,32 @@ func (foe BadOpenshiftEngine) GetNamespace(name string) (*corev1.Namespace, erro
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-ns",
 		},
+	}, nil
+}
+
+func (foe BadOpenshiftEngine) CreateSecret(name string, content map[string]string, secretType corev1.SecretType, opts cli.OpenshiftOptions) (*corev1.Secret, error) {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pull-image-secret",
+			Namespace: "test-ns",
+		},
+		Type:       "kubernetes.io/dockerconfigjson",
+		StringData: map[string]string{".dockerconfigjson": "secretData"},
+	}, nil
+}
+
+func (foe BadOpenshiftEngine) DeleteSecret(name string, opts cli.OpenshiftOptions) error {
+	return nil
+}
+
+func (foe BadOpenshiftEngine) GetSecret(name string, opts cli.OpenshiftOptions) (*corev1.Secret, error) {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pull-image-secret",
+			Namespace: "test-ns",
+		},
+		Type:       "kubernetes.io/dockerconfigjson",
+		StringData: map[string]string{".dockerconfigjson": "secretData"},
 	}, nil
 }
 
@@ -304,5 +352,9 @@ func (foe BadOpenshiftEngine) GetSubscription(name string, opts cli.OpenshiftOpt
 }
 
 func (foe BadOpenshiftEngine) GetCSV(name string, opts cli.OpenshiftOptions) (*operatorv1alpha1.ClusterServiceVersion, error) {
+	return nil, nil
+}
+
+func (foe BadOpenshiftEngine) GetImages() (map[string]struct{}, error) {
 	return nil, nil
 }

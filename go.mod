@@ -3,6 +3,7 @@ module github.com/redhat-openshift-ecosystem/openshift-preflight
 go 1.16
 
 require (
+	github.com/blang/semver v3.5.1+incompatible
 	github.com/docker/docker-credential-helpers v0.6.4 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/google/go-containerregistry v0.6.0
@@ -14,6 +15,7 @@ require (
 	github.com/onsi/ginkgo v1.16.4
 	github.com/onsi/gomega v1.16.0
 	github.com/opencontainers/image-spec v1.0.2-0.20190823105129-775207bd45b6 // indirect
+	github.com/openshift/api v3.9.0+incompatible
 	github.com/operator-framework/api v0.10.1
 	github.com/pelletier/go-toml v1.9.4 // indirect
 	github.com/sirupsen/logrus v1.8.1
@@ -25,7 +27,7 @@ require (
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/ini.v1 v1.63.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0
-	gotest.tools/v3 v3.0.3 // indirect
+	gotest.tools/v3 v3.0.3
 	k8s.io/api v0.22.1
 	k8s.io/apimachinery v0.22.1
 	k8s.io/client-go v0.22.1

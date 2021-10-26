@@ -3,11 +3,13 @@ package operator
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	operatorv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	"github.com/spf13/viper"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/redhat-openshift-ecosystem/openshift-preflight/certification"
 	"github.com/redhat-openshift-ecosystem/openshift-preflight/certification/artifacts"
@@ -29,11 +31,21 @@ type OperatorData struct {
 
 type DeployableByOlmCheck struct {
 	OpenshiftEngine cli.OpenshiftEngine
+	csvReady        bool
+	validImages     bool
 }
 
 var (
 	subscriptionTimeout time.Duration = 180 * time.Second
 	csvTimeout          time.Duration = 90 * time.Second
+	approvedRegistries                = map[string]struct{}{
+		"registry.connect.dev.redhat.com":   {},
+		"registry.connect.qa.redhat.com":    {},
+		"registry.connect.stage.redhat.com": {},
+		"registry.connect.redhat.com":       {},
+		"registry.redhat.io":                {},
+		"registry.access.redhat.com":        {},
+	}
 )
 
 func NewDeployableByOlmCheck(openshiftEngine *cli.OpenshiftEngine) *DeployableByOlmCheck {
@@ -43,13 +55,14 @@ func NewDeployableByOlmCheck(openshiftEngine *cli.OpenshiftEngine) *DeployableBy
 }
 
 func (p *DeployableByOlmCheck) Validate(bundleRef certification.ImageReference) (bool, error) {
-	// retrieve the required data
-	operatorData, err := p.operatorMetadata(bundleRef)
+	// gather the list of registry and pod images
+	beforeOperatorImages, err := p.getImages()
 	if err != nil {
 		return false, err
 	}
 
-	err = p.OpenshiftEngine.Setup()
+	// retrieve the required data
+	operatorData, err := p.operatorMetadata(bundleRef)
 	if err != nil {
 		return false, err
 	}
@@ -67,7 +80,42 @@ func (p *DeployableByOlmCheck) Validate(bundleRef certification.ImageReference) 
 		return false, err
 	}
 
-	return p.isCSVReady(installedCSV, *operatorData)
+	p.csvReady, err = p.isCSVReady(installedCSV, *operatorData)
+	if err != nil {
+		return false, err
+	}
+
+	afterOperatorImages, err := p.getImages()
+	if err != nil {
+		return false, err
+	}
+
+	operatorImages := diffImageList(beforeOperatorImages, afterOperatorImages)
+	p.validImages = checkImageSource(operatorImages)
+
+	return p.csvReady, nil
+}
+
+func diffImageList(before, after map[string]struct{}) []string {
+	var operatorImages []string
+	for image := range after {
+		if _, ok := before[image]; !ok {
+			operatorImages = append(operatorImages, image)
+		}
+	}
+	return operatorImages
+}
+
+func checkImageSource(operatorImages []string) bool {
+	allApproved := true
+	for _, image := range operatorImages {
+		userRegistry := strings.Split(image, "/")[0]
+		if _, ok := approvedRegistries[userRegistry]; !ok {
+			log.Warnf("Unapproved registry found: %s", image)
+			allApproved = false
+		}
+	}
+	return allApproved
 }
 
 func (p *DeployableByOlmCheck) operatorMetadata(bundleRef certification.ImageReference) (*OperatorData, error) {
@@ -80,10 +128,6 @@ func (p *DeployableByOlmCheck) operatorMetadata(bundleRef certification.ImageRef
 	}
 
 	catalogImage := viper.GetString(indexImageKey)
-	if len(catalogImage) == 0 {
-		log.Error(fmt.Sprintf("To set the key, export PFLT_%s or add %s:<value> to config.yaml in the current working directory", strings.ToUpper(indexImageKey), indexImageKey))
-		return nil, errors.ErrIndexImageUndefined
-	}
 
 	channel, err := annotation(annotations, channelKey)
 	if err != nil {
@@ -112,7 +156,23 @@ func (p *DeployableByOlmCheck) setUp(operatorData OperatorData) error {
 		return err
 	}
 
-	if _, err := p.OpenshiftEngine.CreateCatalogSource(cli.CatalogSourceData{Name: operatorData.App, Image: operatorData.CatalogImage}, cli.OpenshiftOptions{Namespace: catalogSourceNS}); err != nil && !kubeErr.IsAlreadyExists(err) {
+	dockerconfig := viper.GetString("dockerConfig")
+	if len(dockerconfig) != 0 {
+		content, err := p.readFileAsByteArray(dockerconfig)
+		if err != nil {
+			return err
+		}
+
+		data := map[string]string{".dockerconfigjson": string(content)}
+
+		if _, err := p.OpenshiftEngine.CreateSecret(secretName, data, corev1.SecretTypeDockerConfigJson, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace}); err != nil && !kubeErr.IsAlreadyExists(err) {
+			return err
+		}
+	} else {
+		log.Debug("No docker config file is found to access the index image in private registries. Proceeding...")
+	}
+
+	if _, err := p.OpenshiftEngine.CreateCatalogSource(cli.CatalogSourceData{Name: operatorData.App, Image: operatorData.CatalogImage, Secrets: []string{secretName}}, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace}); err != nil && !kubeErr.IsAlreadyExists(err) {
 		return err
 	}
 
@@ -125,7 +185,7 @@ func (p *DeployableByOlmCheck) setUp(operatorData OperatorData) error {
 		Name:                   operatorData.App,
 		Channel:                operatorData.Channel,
 		CatalogSource:          operatorData.App,
-		CatalogSourceNamespace: catalogSourceNS,
+		CatalogSourceNamespace: operatorData.InstallNamespace,
 		Package:                operatorData.PackageName,
 	}
 	if _, err := p.OpenshiftEngine.CreateSubscription(subscriptionData, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace}); err != nil && !kubeErr.IsAlreadyExists(err) {
@@ -236,7 +296,7 @@ func (p *DeployableByOlmCheck) cleanUp(operatorData OperatorData) {
 	}
 	p.writeToFile(subs, operatorData.App, "subscription")
 
-	cs, err := p.OpenshiftEngine.GetCatalogSource(operatorData.App, cli.OpenshiftOptions{Namespace: catalogSourceNS})
+	cs, err := p.OpenshiftEngine.GetCatalogSource(operatorData.App, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace})
 	if err != nil {
 		log.Error("unable to retrieve the catalogsource")
 	}
@@ -256,8 +316,9 @@ func (p *DeployableByOlmCheck) cleanUp(operatorData OperatorData) {
 
 	log.Trace("Deleting the resources created by Check")
 	p.OpenshiftEngine.DeleteSubscription(operatorData.App, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace})
-	p.OpenshiftEngine.DeleteCatalogSource(operatorData.App, cli.OpenshiftOptions{Namespace: catalogSourceNS})
+	p.OpenshiftEngine.DeleteCatalogSource(operatorData.App, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace})
 	p.OpenshiftEngine.DeleteOperatorGroup(operatorData.App, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace})
+	p.OpenshiftEngine.DeleteSecret(secretName, cli.OpenshiftOptions{Namespace: operatorData.InstallNamespace})
 	p.OpenshiftEngine.DeleteNamespace(operatorData.InstallNamespace, cli.OpenshiftOptions{})
 }
 
@@ -276,13 +337,26 @@ func (p *DeployableByOlmCheck) writeToFile(data interface{}, resource string, re
 	return nil
 }
 
+func (p *DeployableByOlmCheck) readFileAsByteArray(filename string) ([]byte, error) {
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		log.Error(fmt.Sprintf("error reading the file: %s", filename))
+		return nil, err
+	}
+	return content, nil
+}
+
+func (p *DeployableByOlmCheck) getImages() (map[string]struct{}, error) {
+	return p.OpenshiftEngine.GetImages()
+}
+
 func (p *DeployableByOlmCheck) Name() string {
 	return "DeployableByOLM"
 }
 
 func (p *DeployableByOlmCheck) Metadata() certification.Metadata {
 	return certification.Metadata{
-		Description:      "Checking if the operator could be deployed by OLM",
+		Description:      "Checking if the operator could be deployed by OLM, and images are from approved sources",
 		Level:            "best",
 		KnowledgeBaseURL: "https://connect.redhat.com/zones/containers/container-certification-policy-guide", // Placeholder
 		CheckURL:         "https://connect.redhat.com/zones/containers/container-certification-policy-guide",
@@ -290,6 +364,12 @@ func (p *DeployableByOlmCheck) Metadata() certification.Metadata {
 }
 
 func (p *DeployableByOlmCheck) Help() certification.HelpText {
+	if !p.validImages {
+		return certification.HelpText{
+			Message:    "It is required that your operator contains images from valid sources",
+			Suggestion: "Images should only be sourced from approved registries",
+		}
+	}
 	return certification.HelpText{
 		Message:    "It is required that your operator could be deployed by OLM",
 		Suggestion: "Follow the guidelines on the operatorsdk website to learn how to package your operator https://sdk.operatorframework.io/docs/olm-integration/cli-overview/",

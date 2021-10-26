@@ -20,8 +20,9 @@ type SubscriptionData struct {
 }
 
 type CatalogSourceData struct {
-	Name  string
-	Image string
+	Name    string
+	Image   string
+	Secrets []string
 }
 
 type OperatorGroupData struct {
@@ -30,11 +31,13 @@ type OperatorGroupData struct {
 }
 
 type OpenshiftEngine interface {
-	Setup() error
-
 	CreateNamespace(name string, opts OpenshiftOptions) (*corev1.Namespace, error)
 	DeleteNamespace(name string, opts OpenshiftOptions) error
 	GetNamespace(name string) (*corev1.Namespace, error)
+
+	CreateSecret(name string, content map[string]string, secretType corev1.SecretType, opts OpenshiftOptions) (*corev1.Secret, error)
+	DeleteSecret(name string, opts OpenshiftOptions) error
+	GetSecret(name string, opts OpenshiftOptions) (*corev1.Secret, error)
 
 	CreateOperatorGroup(data OperatorGroupData, opts OpenshiftOptions) (*operatorv1.OperatorGroup, error)
 	DeleteOperatorGroup(name string, opts OpenshiftOptions) error
@@ -49,4 +52,6 @@ type OpenshiftEngine interface {
 	GetSubscription(name string, opts OpenshiftOptions) (*operatorv1alpha1.Subscription, error)
 
 	GetCSV(name string, opts OpenshiftOptions) (*operatorv1alpha1.ClusterServiceVersion, error)
+
+	GetImages() (map[string]struct{}, error)
 }
